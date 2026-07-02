@@ -1,24 +1,26 @@
 //! A parsed Apple Archive entry header.
 //!
-//! A header is an ordered list of [`Entry`]s (key + [`Field`] value) prefixed by
+//! A header is an ordered list of [`Entry`]s (key + [`FieldValue`]) prefixed by
 //! the `AA01`/`YAA1` magic and a `u16` total size. Entries are stored directly
 //! and serialized on demand via [`Header::encode`].
 
+use std::io::{Cursor, Read};
+
 use crate::error::{Error, Result};
-use crate::field::{Blob, Field, FieldKey, Hash, Timespec, Uint};
+use crate::field::{Blob, FieldKey, FieldValue, Hash, Timespec, Uint};
 
 /// Magic for modern Apple Archives (`AA01`).
 pub(crate) const AAR_MAGIC: &[u8; 4] = b"AA01";
 /// Magic for legacy YAA archives (`YAA1`), treated identically.
 pub(crate) const YAA_MAGIC: &[u8; 4] = b"YAA1";
 
-/// A single header entry: a key paired with its typed [`Field`] value.
+/// A single header entry: a key paired with its typed [`FieldValue`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     /// The three-character field key.
     pub key: FieldKey,
     /// The entry's value.
-    pub value: Field,
+    pub value: FieldValue,
 }
 
 /// An Apple Archive entry header — an ordered collection of [`Entry`]s.
@@ -37,38 +39,30 @@ impl Header {
 
     /// Parse a header from encoded bytes.
     ///
-    /// `data` must begin with the magic and be at least as long as the `u16`
+    /// Data must begin with one of the magic sequences and be at least as long as the `u16`
     /// size stored at offset 4; trailing bytes beyond that size are ignored
-    /// (they belong to the item's blob data). The number of bytes consumed by
-    /// the header can be recovered with [`Header::encoded_len`].
-    pub fn from_bytes(data: &[u8]) -> Result<Header> {
-        if data.len() < 6 {
-            return Err(Error::Truncated);
-        }
-        let magic = &data[0..4];
-        if magic != AAR_MAGIC && magic != YAA_MAGIC {
+    /// (they belong to the item's blob data).
+    pub fn read(cursor: &mut Cursor<&[u8]>) -> Result<Header> {
+        let start = cursor.position();
+        let magic = cursor.read_array::<4>()?;
+        if &magic != AAR_MAGIC && &magic != YAA_MAGIC {
             return Err(Error::BadMagic);
         }
-        let declared = u16::from_le_bytes([data[4], data[5]]) as usize;
-        if declared < 6 || data.len() < declared {
-            return Err(Error::Truncated);
-        }
+
+        // The stored size spans the whole header, including this 6-byte prefix.
+        let head_len = u16::from_le_bytes(cursor.read_array()?) as u64;
+        let head_end = start + head_len;
 
         let mut entries = Vec::new();
-        let mut pos = 6usize;
-        while pos < declared {
-            if pos + 4 > declared {
-                return Err(Error::Truncated);
-            }
-            let key = FieldKey::from_ascii(&[data[pos], data[pos + 1], data[pos + 2]]);
-            let subtype = data[pos + 3];
-            pos += 4;
-
-            let (value, next) = Field::decode(subtype, data, pos, declared)?;
-            pos = next;
+        while cursor.position() < head_end {
+            let key = FieldKey::from_ascii(&cursor.read_array()?);
+            let value = FieldValue::read(cursor)?;
             entries.push(Entry { key, value });
         }
 
+        // Land exactly on the declared header end, skipping any trailing padding,
+        // so the caller's cursor is positioned at the start of the blob data.
+        cursor.set_position(head_end);
         Ok(Header { entries })
     }
 
@@ -100,8 +94,6 @@ impl Header {
         out.extend_from_slice(AAR_MAGIC);
         out.extend_from_slice(&(total as u16).to_le_bytes());
         for entry in &self.entries {
-            // Guard against hand-built invalid values before trusting subtype().
-            entry.value.validate()?;
             out.extend_from_slice(&entry.key.as_bytes());
             out.push(entry.value.subtype());
             entry.value.write_value(out);
@@ -115,7 +107,7 @@ impl Header {
         self.entries
             .iter()
             .filter_map(|e| match &e.value {
-                Field::Blob(b) => Some(b.blob_size()),
+                FieldValue::Blob(b) => Some(b.blob_size()),
                 _ => None,
             })
             .sum()
@@ -132,13 +124,13 @@ impl Header {
     }
 
     /// Borrow the value for a key, if present.
-    pub fn get(&self, key: FieldKey) -> Option<&Field> {
+    pub fn get(&self, key: FieldKey) -> Option<&FieldValue> {
         self.entries.iter().find(|e| e.key == key).map(|e| &e.value)
     }
 
     /// The declared size of an entry's value, if present.
     pub fn field_size(&self, key: FieldKey) -> Option<usize> {
-        self.get(key).map(Field::size)
+        self.get(key).map(FieldValue::size)
     }
 
     /// Read a field as an unsigned integer.
@@ -146,8 +138,8 @@ impl Header {
     /// Works for `Uint` (returns the value) and `Blob` (returns the blob size).
     pub fn get_uint(&self, key: FieldKey) -> Option<u64> {
         match self.get(key)? {
-            Field::Uint(u) => Some(u.value()),
-            Field::Blob(b) => Some(b.blob_size()),
+            FieldValue::Uint(u) => Some(u.value()),
+            FieldValue::Blob(b) => Some(b.blob_size()),
             _ => None,
         }
     }
@@ -155,7 +147,7 @@ impl Header {
     /// Borrow a string field's raw bytes.
     pub fn get_string(&self, key: FieldKey) -> Option<&[u8]> {
         match self.get(key)? {
-            Field::String(s) => Some(s),
+            FieldValue::String(s) => Some(s),
             _ => None,
         }
     }
@@ -170,8 +162,7 @@ impl Header {
     ///
     /// Replacing a field with a value of a different size or kind is allowed,
     /// since the buffer is regenerated on encode.
-    pub fn set(&mut self, key: FieldKey, value: Field) -> Result<()> {
-        value.validate()?;
+    pub fn set(&mut self, key: FieldKey, value: FieldValue) -> Result<()> {
         if let Some(idx) = self.index_of(key) {
             self.entries[idx].value = value;
         } else {
@@ -182,21 +173,18 @@ impl Header {
 
     /// Set an unsigned-integer field.
     pub fn set_uint(&mut self, key: FieldKey, uint: Uint) -> Result<()> {
-        self.set(key, Field::Uint(uint))
+        self.set(key, FieldValue::Uint(uint))
     }
 
     /// Set a flag field.
     pub fn set_flag(&mut self, key: FieldKey) -> Result<()> {
-        self.set(key, Field::Flag)
+        self.set(key, FieldValue::Flag)
     }
 
     /// Set a string field from raw bytes.
     pub fn set_string(&mut self, key: FieldKey, s: impl Into<Vec<u8>>) -> Result<()> {
-        let bytes = s.into();
-        if bytes.len() > u16::MAX as usize {
-            return Err(Error::StringTooLong(bytes.len()));
-        }
-        self.set(key, Field::String(bytes))
+        let string = crate::field::String::try_from(s.into())?;
+        self.set(key, FieldValue::String(string))
     }
 
     /// Set a blob field.
@@ -215,21 +203,24 @@ impl Header {
         } else {
             size
         };
-        self.set(key, Field::Blob(Blob::from_width(size as usize, blob_size)?))
+        self.set(
+            key,
+            FieldValue::Blob(Blob::from_width(size as usize, blob_size)?),
+        )
     }
 
     /// Set a timespec field.
     pub fn set_timespec(&mut self, key: FieldKey, timespec: Timespec) -> Result<()> {
-        self.set(key, Field::Timespec(timespec))
+        self.set(key, FieldValue::Timespec(timespec))
     }
 
     /// Set a hash field.
     pub fn set_hash(&mut self, key: FieldKey, hash: Hash) -> Result<()> {
-        self.set(key, Field::Hash(hash))
+        self.set(key, FieldValue::Hash(hash))
     }
 
     /// Remove an entry by key, returning the value if it was present.
-    pub fn remove(&mut self, key: FieldKey) -> Option<Field> {
+    pub fn remove(&mut self, key: FieldKey) -> Option<FieldValue> {
         if let Some(idx) = self.index_of(key) {
             let value = self.entries.remove(idx).value;
             Some(value)

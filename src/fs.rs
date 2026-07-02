@@ -56,7 +56,7 @@ fn wrap_file(path: &Path) -> Result<ArchiveItem> {
         .unwrap_or_default();
     let data = fs::read(path)?;
     let mut header = Header::new();
-    header.set_uint(FieldKey::TYP, Uint::U8(b'F'))?;
+    header.set_uint(FieldKey::TYP, Uint::Size1(b'F'))?;
     header.set_string(FieldKey::PAT, name.into_bytes())?;
     header.set_blob(FieldKey::DAT, 0, data.len() as u64)?;
     Ok(ArchiveItem::with_blob(header, data))
@@ -83,7 +83,7 @@ fn add_directory_contents(dir: &Path, base_rel: &str, items: &mut Vec<ArchiveIte
         let file_type = meta.file_type();
         if file_type.is_dir() {
             header.set_string(FieldKey::PAT, rel.clone().into_bytes())?;
-            header.set_uint(FieldKey::TYP, Uint::U8(b'D'))?;
+            header.set_uint(FieldKey::TYP, Uint::Size1(b'D'))?;
             items.push(ArchiveItem::new(header));
             add_directory_contents(&full, &rel, items)?;
         } else if file_type.is_symlink() {
@@ -91,12 +91,12 @@ fn add_directory_contents(dir: &Path, base_rel: &str, items: &mut Vec<ArchiveIte
             let target_bytes = path_to_bytes(&target);
             header.set_string(FieldKey::PAT, rel.into_bytes())?;
             header.set_string(FieldKey::LNK, target_bytes)?;
-            header.set_uint(FieldKey::TYP, Uint::U8(b'L'))?;
+            header.set_uint(FieldKey::TYP, Uint::Size1(b'L'))?;
             items.push(ArchiveItem::new(header));
         } else if file_type.is_file() {
             let data = fs::read(&full)?;
             header.set_string(FieldKey::PAT, rel.into_bytes())?;
-            header.set_uint(FieldKey::TYP, Uint::U8(b'F'))?;
+            header.set_uint(FieldKey::TYP, Uint::Size1(b'F'))?;
             header.set_blob(FieldKey::DAT, 0, data.len() as u64)?;
             items.push(ArchiveItem::with_blob(header, data));
         }
@@ -177,8 +177,8 @@ fn safe_join(root: &Path, rel: &[u8]) -> Result<PathBuf> {
 fn set_owner_fields(header: &mut Header, meta: &fs::Metadata) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     // UID is stored in 2 bytes, GID in 1 byte.
-    header.set_uint(FieldKey::UID, Uint::U16(meta.uid() as u16))?;
-    header.set_uint(FieldKey::GID, Uint::U8(meta.gid() as u8))?;
+    header.set_uint(FieldKey::UID, Uint::Size2(meta.uid() as u16))?;
+    header.set_uint(FieldKey::GID, Uint::Size1(meta.gid() as u8))?;
     Ok(())
 }
 

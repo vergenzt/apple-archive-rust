@@ -3,7 +3,7 @@
 //!
 //! The crate covers the core Apple Archive format:
 //!
-//! * Parsing and building entry [`Header`]s and their typed [`Field`] values.
+//! * Parsing and building entry [`Header`]s and their typed [`FieldValue`]s.
 //! * Reading and writing uncompressed [`PlainArchive`]s.
 //! * Reading and writing compressed containers ([`Archive`]) — raw, LZFSE
 //!   (`pbze`), and zlib (`pbzz`). LZBITMAP (`pbzb`) is recognized but not
@@ -21,7 +21,7 @@
 //! use apple_archive::{Header, ArchiveItem, PlainArchive, FieldKey, Uint};
 //!
 //! let mut header = Header::new();
-//! header.set_uint(FieldKey::TYP, Uint::U8(b'F')).unwrap();
+//! header.set_uint(FieldKey::TYP, Uint::Size1(b'F')).unwrap();
 //! header.set_string(FieldKey::PAT, "hello.txt").unwrap();
 //! header.set_blob(FieldKey::DAT, 0, 5).unwrap();
 //! let item = ArchiveItem::with_blob(header, b"hello".to_vec());
@@ -33,6 +33,8 @@
 //! assert_eq!(parsed, archive);
 //! ```
 
+#![feature(read_array)]
+
 pub mod archive;
 pub mod compression;
 pub mod error;
@@ -43,7 +45,7 @@ pub mod header;
 pub use archive::{ArchiveItem, PlainArchive};
 pub use compression::{Archive, Compression};
 pub use error::{Error, Result};
-pub use field::{Blob, Field, FieldKey, Hash, Timespec, Uint};
+pub use field::{Blob, FieldValue, FieldKey, Hash, Timespec, Uint};
 pub use header::{Entry, Header};
 
 use std::path::Path;

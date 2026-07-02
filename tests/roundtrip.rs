@@ -1,7 +1,9 @@
 //! In-memory and on-disk round-trip tests for the Apple Archive port.
 
+use std::io::Cursor;
+
 use apple_archive::{
-    Archive, ArchiveItem, Blob, Compression, Field, FieldKey, Hash, Header, PlainArchive, Timespec,
+    Archive, ArchiveItem, Blob, Compression, FieldValue, FieldKey, Hash, Header, PlainArchive, Timespec,
     Uint,
 };
 
@@ -10,7 +12,7 @@ use apple_archive::{
 #[test]
 fn header_byte_layout() {
     let mut header = Header::new();
-    header.set_uint(FieldKey::TYP, Uint::U8(b'F')).unwrap();
+    header.set_uint(FieldKey::TYP, Uint::Size1(b'F')).unwrap();
 
     let bytes = header.encode().unwrap();
     // 6-byte prefix + 4 (key+subtype) + 1 (value) = 11 bytes.
@@ -41,9 +43,10 @@ fn unknown_key_roundtrips() {
     // why keys are a u32 newtype rather than a closed enum.
     let custom = FieldKey::from_ascii(b"ZZZ");
     let mut header = Header::new();
-    header.set_uint(custom, Uint::U32(0xABCD)).unwrap();
+    header.set_uint(custom, Uint::Size4(0xABCD)).unwrap();
 
-    let parsed = Header::from_bytes(&header.encode().unwrap()).unwrap();
+    let encoded = header.encode().unwrap();
+    let parsed = Header::read(&mut Cursor::new(encoded.as_slice())).unwrap();
     assert_eq!(parsed, header);
     assert_eq!(parsed.get_uint(custom), Some(0xABCD));
     assert_eq!(parsed.entries()[0].key, custom);
@@ -66,16 +69,16 @@ fn header_string_field_layout() {
 fn header_roundtrip_all_types() {
     let mut header = Header::new();
     header.set_flag(FieldKey::TYP).unwrap();
-    header.set_uint(FieldKey::UID, Uint::U32(12345)).unwrap();
+    header.set_uint(FieldKey::UID, Uint::Size4(12345)).unwrap();
     header.set_string(FieldKey::PAT, "some/path.txt").unwrap();
     header.set_blob(FieldKey::DAT, 0, 4096).unwrap();
     header
-        .set_timespec(FieldKey::MOD, Timespec::B8([1, 2, 3, 4, 5, 6, 7, 8]))
+        .set_timespec(FieldKey::MOD, Timespec::Size8([1, 2, 3, 4, 5, 6, 7, 8]))
         .unwrap();
-    header.set_hash(FieldKey::LNK, Hash::B32([0xAB; 32])).unwrap();
+    header.set_hash(FieldKey::LNK, Hash::Size32([0xAB; 32])).unwrap();
 
     let bytes = header.encode().unwrap();
-    let parsed = Header::from_bytes(&bytes).unwrap();
+    let parsed = Header::read(&mut Cursor::new(bytes.as_slice())).unwrap();
     assert_eq!(parsed, header);
     assert_eq!(parsed.encoded_len(), bytes.len());
 }
@@ -86,26 +89,26 @@ fn blob_auto_size() {
     header.set_blob(FieldKey::DAT, 0, 100).unwrap();
     assert!(matches!(
         header.get(FieldKey::DAT),
-        Some(Field::Blob(Blob::Size2(100)))
+        Some(FieldValue::Blob(Blob::Size2(100)))
     ));
 
     header.set_blob(FieldKey::XAT, 0, 70000).unwrap();
     assert!(matches!(
         header.get(FieldKey::XAT),
-        Some(Field::Blob(Blob::Size4(_)))
+        Some(FieldValue::Blob(Blob::Size4(_)))
     ));
 }
 
 #[test]
 fn plain_archive_roundtrip() {
     let mut h1 = Header::new();
-    h1.set_uint(FieldKey::TYP, Uint::U8(b'F')).unwrap();
+    h1.set_uint(FieldKey::TYP, Uint::Size1(b'F')).unwrap();
     h1.set_string(FieldKey::PAT, "a.txt").unwrap();
     h1.set_blob(FieldKey::DAT, 0, 5).unwrap();
     let i1 = ArchiveItem::with_blob(h1, b"hello".to_vec());
 
     let mut h2 = Header::new();
-    h2.set_uint(FieldKey::TYP, Uint::U8(b'D')).unwrap();
+    h2.set_uint(FieldKey::TYP, Uint::Size1(b'D')).unwrap();
     h2.set_string(FieldKey::PAT, "dir").unwrap();
     let i2 = ArchiveItem::new(h2);
 
@@ -175,7 +178,7 @@ fn sample_archive() -> PlainArchive {
     let mut items = Vec::new();
     for i in 0..8 {
         let mut header = Header::new();
-        header.set_uint(FieldKey::TYP, Uint::U8(b'F')).unwrap();
+        header.set_uint(FieldKey::TYP, Uint::Size1(b'F')).unwrap();
         header.set_string(FieldKey::PAT, format!("file{i}.txt")).unwrap();
         let data = format!("contents of file number {i}, repeated. ").repeat(20);
         header.set_blob(FieldKey::DAT, 0, data.len() as u64).unwrap();

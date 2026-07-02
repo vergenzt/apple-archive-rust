@@ -2,10 +2,13 @@
 //!
 //! Each header field is encoded as three ASCII key bytes followed by a single
 //! "subtype" byte that jointly encodes the field's kind and the size of its
-//! value. A single `FIELD_KINDS` table is the one source of truth for that
-//! mapping, used for both decoding and encoding.
+//! value. [`FieldValue::read`] and [`FieldValue::subtype`] are the paired
+//! source of truth for that mapping, used for decoding and encoding.
 
-use std::fmt;
+use std::{
+    fmt,
+    io::{Cursor, Read},
+};
 
 use crate::error::{Error, Result};
 
@@ -35,7 +38,11 @@ impl FieldKey {
 
     /// The three ASCII key bytes.
     pub const fn as_bytes(self) -> [u8; 3] {
-        [(self.0 >> 24) as u8, (self.0 >> 16) as u8, (self.0 >> 8) as u8]
+        [
+            (self.0 >> 24) as u8,
+            (self.0 >> 16) as u8,
+            (self.0 >> 8) as u8,
+        ]
     }
 
     // ---- Commonly used keys --------------------
@@ -73,101 +80,44 @@ impl fmt::Display for FieldKey {
     }
 }
 
-/// The kind of a field, used to drive the `FIELD_KINDS` table.
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum FieldKind {
-    Flag,
-    Uint,
-    Blob,
-    String,
-    Hash,
-    Timespec,
-}
-
-/// The single source of truth mapping a subtype byte to its `(FieldKind, size)`.
-///
-/// Decoding scans by byte; encoding scans by `(FieldKind, size)`. For strings
-/// the size is `0` because the real length is stored inline as a `u16`.
-const FIELD_KINDS: &[(u8, FieldKind, usize)] = &[
-    (b'*', FieldKind::Flag, 0),
-    (b'1', FieldKind::Uint, 1),
-    (b'2', FieldKind::Uint, 2),
-    (b'4', FieldKind::Uint, 4),
-    (b'8', FieldKind::Uint, 8),
-    (b'A', FieldKind::Blob, 2),
-    (b'B', FieldKind::Blob, 4),
-    (b'C', FieldKind::Blob, 8),
-    (b'F', FieldKind::Hash, 4),
-    (b'G', FieldKind::Hash, 20),
-    (b'H', FieldKind::Hash, 32),
-    (b'I', FieldKind::Hash, 48),
-    (b'J', FieldKind::Hash, 64),
-    (b'S', FieldKind::Timespec, 8),
-    (b'T', FieldKind::Timespec, 12),
-    (b'P', FieldKind::String, 0),
-];
-
 /// An unsigned integer field, sized to one of the widths the format allows.
-///
-/// Each variant stores a native integer of the matching width, so the size and
-/// value can never disagree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Uint {
-    /// 1-byte value (subtype `1`).
-    U8(u8),
-    /// 2-byte value (subtype `2`).
-    U16(u16),
-    /// 4-byte value (subtype `4`).
-    U32(u32),
-    /// 8-byte value (subtype `8`).
-    U64(u64),
+    Size1(u8),
+    Size2(u16),
+    Size4(u32),
+    Size8(u64),
 }
 
 impl Uint {
     /// The value widened to `u64`.
     pub fn value(&self) -> u64 {
         match self {
-            Uint::U8(v) => *v as u64,
-            Uint::U16(v) => *v as u64,
-            Uint::U32(v) => *v as u64,
-            Uint::U64(v) => *v,
+            Uint::Size1(v) => *v as u64,
+            Uint::Size2(v) => *v as u64,
+            Uint::Size4(v) => *v as u64,
+            Uint::Size8(v) => *v,
         }
     }
 
     /// The encoded width in bytes (1, 2, 4, or 8).
     pub fn byte_len(&self) -> usize {
         match self {
-            Uint::U8(_) => 1,
-            Uint::U16(_) => 2,
-            Uint::U32(_) => 4,
-            Uint::U64(_) => 8,
+            Uint::Size1(_) => 1,
+            Uint::Size2(_) => 2,
+            Uint::Size4(_) => 4,
+            Uint::Size8(_) => 8,
         }
     }
 
     /// Append the little-endian value bytes to `out`.
     fn write_value(&self, out: &mut Vec<u8>) {
         match self {
-            Uint::U8(v) => out.extend_from_slice(&v.to_le_bytes()),
-            Uint::U16(v) => out.extend_from_slice(&v.to_le_bytes()),
-            Uint::U32(v) => out.extend_from_slice(&v.to_le_bytes()),
-            Uint::U64(v) => out.extend_from_slice(&v.to_le_bytes()),
+            Uint::Size1(v) => out.extend_from_slice(&v.to_le_bytes()),
+            Uint::Size2(v) => out.extend_from_slice(&v.to_le_bytes()),
+            Uint::Size4(v) => out.extend_from_slice(&v.to_le_bytes()),
+            Uint::Size8(v) => out.extend_from_slice(&v.to_le_bytes()),
         }
-    }
-}
-
-impl TryFrom<&[u8]> for Uint {
-    type Error = Error;
-
-    /// Build a [`Uint`] from little-endian bytes whose length is 1, 2, 4, or 8;
-    /// the length selects the width.
-    fn try_from(bytes: &[u8]) -> Result<Uint> {
-        Ok(match bytes.len() {
-            1 => Uint::U8(bytes[0]),
-            2 => Uint::U16(u16::from_le_bytes(bytes.try_into().unwrap())),
-            4 => Uint::U32(u32::from_le_bytes(bytes.try_into().unwrap())),
-            8 => Uint::U64(u64::from_le_bytes(bytes.try_into().unwrap())),
-            n => return Err(Error::UnsupportedFieldSize { size: n }),
-        })
     }
 }
 
@@ -179,11 +129,8 @@ impl TryFrom<&[u8]> for Uint {
 /// width and the value can never disagree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Blob {
-    /// Size stored in 2 bytes (subtype `A`).
-    Size2(u64),
-    /// Size stored in 4 bytes (subtype `B`).
-    Size4(u64),
-    /// Size stored in 8 bytes (subtype `C`).
+    Size2(u16),
+    Size4(u32),
     Size8(u64),
 }
 
@@ -191,7 +138,9 @@ impl Blob {
     /// The length of the trailing blob data.
     pub fn blob_size(&self) -> u64 {
         match self {
-            Blob::Size2(v) | Blob::Size4(v) | Blob::Size8(v) => *v,
+            Blob::Size2(v) => *v as u64,
+            Blob::Size4(v) => *v as u64,
+            Blob::Size8(v) => *v,
         }
     }
 
@@ -204,11 +153,13 @@ impl Blob {
         }
     }
 
-    /// Build a blob from its size-field width (2, 4, or 8) and data length.
+    /// Build a blob from its size-field width (2, 4, or 8) and data length,
+    /// erroring if the length does not fit the chosen width.
     pub(crate) fn from_width(size_bytes: usize, blob_size: u64) -> Result<Blob> {
+        let too_big = || Error::UnsupportedFieldSize { size: size_bytes };
         Ok(match size_bytes {
-            2 => Blob::Size2(blob_size),
-            4 => Blob::Size4(blob_size),
+            2 => Blob::Size2(blob_size.try_into().map_err(|_| too_big())?),
+            4 => Blob::Size4(blob_size.try_into().map_err(|_| too_big())?),
             8 => Blob::Size8(blob_size),
             n => return Err(Error::UnsupportedFieldSize { size: n }),
         })
@@ -221,60 +172,27 @@ impl Blob {
 }
 
 /// A raw hash digest, sized to one of the fixed lengths the format allows.
-///
-/// Each variant owns a fixed-size array, so an out-of-range length cannot be
-/// constructed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hash {
-    /// 4-byte digest (subtype `F`).
-    B4([u8; 4]),
-    /// 20-byte digest, e.g. SHA-1 (subtype `G`).
-    B20([u8; 20]),
-    /// 32-byte digest, e.g. SHA-256 (subtype `H`).
-    B32([u8; 32]),
-    /// 48-byte digest, e.g. SHA-384 (subtype `I`).
-    B48([u8; 48]),
-    /// 64-byte digest, e.g. SHA-512 (subtype `J`).
-    B64([u8; 64]),
+    Size4([u8; 4]),
+    Size20([u8; 20]),
+    Size32([u8; 32]),
+    Size48([u8; 48]),
+    Size64([u8; 64]),
 }
 
 impl Hash {
     /// The digest bytes.
     pub fn as_bytes(&self) -> &[u8] {
         match self {
-            Hash::B4(b) => b,
-            Hash::B20(b) => b,
-            Hash::B32(b) => b,
-            Hash::B48(b) => b,
-            Hash::B64(b) => b,
+            Hash::Size4(b) => b,
+            Hash::Size20(b) => b,
+            Hash::Size32(b) => b,
+            Hash::Size48(b) => b,
+            Hash::Size64(b) => b,
         }
     }
 
-    /// The digest length in bytes.
-    pub fn len(&self) -> usize {
-        self.as_bytes().len()
-    }
-
-    /// Whether the digest has no bytes (never true; a digest is always sized).
-    pub fn is_empty(&self) -> bool {
-        self.as_bytes().is_empty()
-    }
-}
-
-impl TryFrom<&[u8]> for Hash {
-    type Error = Error;
-
-    /// Build a [`Hash`](enum@Hash) from bytes whose length is one of 4, 20, 32, 48, or 64.
-    fn try_from(bytes: &[u8]) -> Result<Hash> {
-        Ok(match bytes.len() {
-            4 => Hash::B4(bytes.try_into().unwrap()),
-            20 => Hash::B20(bytes.try_into().unwrap()),
-            32 => Hash::B32(bytes.try_into().unwrap()),
-            48 => Hash::B48(bytes.try_into().unwrap()),
-            64 => Hash::B64(bytes.try_into().unwrap()),
-            n => return Err(Error::UnsupportedFieldSize { size: n }),
-        })
-    }
 }
 
 /// A timespec value, in one of the two forms the format allows.
@@ -283,93 +201,122 @@ impl TryFrom<&[u8]> for Hash {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Timespec {
     /// 8-byte form: seconds (subtype `S`).
-    B8([u8; 8]),
+    Size8([u8; 8]),
     /// 12-byte form: seconds and nanoseconds (subtype `T`).
-    B12([u8; 12]),
+    Size12([u8; 12]),
 }
 
 impl Timespec {
     /// The raw timespec bytes.
     pub fn as_bytes(&self) -> &[u8] {
         match self {
-            Timespec::B8(b) => b,
-            Timespec::B12(b) => b,
+            Timespec::Size8(b) => b,
+            Timespec::Size12(b) => b,
         }
-    }
-
-    /// The length in bytes (8 or 12).
-    pub fn len(&self) -> usize {
-        self.as_bytes().len()
-    }
-
-    /// Whether there are no bytes (never true; a timespec is always sized).
-    pub fn is_empty(&self) -> bool {
-        self.as_bytes().is_empty()
     }
 }
 
-impl TryFrom<&[u8]> for Timespec {
+/// A "string" field: raw bytes (not required to be UTF-8) whose length always
+/// fits the `u16` length prefix the format uses. The invariant is enforced at
+/// construction, so any `String` is guaranteed encodable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct String {
+    buf: Box<[u8]>,
+}
+
+impl std::ops::Deref for String {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.buf
+    }
+}
+
+impl TryFrom<Vec<u8>> for String {
     type Error = Error;
 
-    /// Build a [`Timespec`] from bytes whose length is 8 or 12.
-    fn try_from(bytes: &[u8]) -> Result<Timespec> {
-        Ok(match bytes.len() {
-            8 => Timespec::B8(bytes.try_into().unwrap()),
-            12 => Timespec::B12(bytes.try_into().unwrap()),
-            n => return Err(Error::UnsupportedFieldSize { size: n }),
-        })
+    fn try_from(value: Vec<u8>) -> Result<Self> {
+        if value.len() > u16::MAX as usize {
+            return Err(Error::StringTooLong(value.len()));
+        }
+        Ok(Self { buf: value.into_boxed_slice() })
+    }
+}
+
+impl TryFrom<&mut Cursor<&[u8]>> for String {
+    type Error = Error;
+
+    fn try_from(cursor: &mut Cursor<&[u8]>) -> Result<String> {
+        let len = u16::from_le_bytes(cursor.read_array()?) as usize;
+        let mut buf = vec![0u8; len];
+        cursor.read_exact(&mut buf)?;
+        Ok(String { buf: buf.into_boxed_slice() })
     }
 }
 
 /// A decoded field value, carrying enough information to re-encode it exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Field {
-    /// A valueless flag (subtype `*`).
+#[repr(u8)]
+pub enum FieldValue {
+    /// A valueless flag.
     Flag,
     /// An unsigned integer; see [`Uint`] for the allowed widths.
     Uint(Uint),
     /// A blob reference; see [`Blob`] for the allowed size-field widths.
     Blob(Blob),
-    /// A length-prefixed string (raw bytes; not required to be UTF-8).
-    String(Vec<u8>),
     /// A raw hash digest; see [`Hash`](enum@Hash) for the allowed lengths.
     Hash(Hash),
     /// A timespec value; see [`Timespec`] for the allowed forms.
     Timespec(Timespec),
+    /// A length-prefixed string (raw bytes; not required to be UTF-8).
+    String(String),
 }
 
-impl Field {
-    /// The `(FieldKind, size)` used to look this value up in `FIELD_KINDS`.
-    fn table_key(&self) -> (FieldKind, usize) {
-        match self {
-            Field::Flag => (FieldKind::Flag, 0),
-            Field::Uint(u) => (FieldKind::Uint, u.byte_len()),
-            Field::Blob(b) => (FieldKind::Blob, b.blob_size_width()),
-            Field::String(_) => (FieldKind::String, 0),
-            Field::Hash(h) => (FieldKind::Hash, h.len()),
-            Field::Timespec(t) => (FieldKind::Timespec, t.len()),
-        }
-    }
-
-    /// The logical size reported for this field.
-    pub fn size(&self) -> usize {
-        match self {
-            Field::String(s) => s.len(),
-            other => other.table_key().1,
-        }
-    }
-
+impl FieldValue {
     /// The subtype byte used to encode this value.
     ///
-    /// Only ever called after [`Field::validate`] has confirmed the value is
-    /// representable, so the table lookup always succeeds.
+    /// Every variant maps to exactly one subtype byte; the enum types make
+    /// unrepresentable `(kind, size)` pairings impossible to construct.
     pub(crate) fn subtype(&self) -> u8 {
-        let (kind, size) = self.table_key();
-        FIELD_KINDS
-            .iter()
-            .find(|(_, k, s)| *k == kind && *s == size)
-            .map(|(b, _, _)| *b)
-            .expect("validate() guarantees a representable (kind, size)")
+        match self {
+            FieldValue::Flag => b'*',
+            FieldValue::Uint(uint) => match uint {
+                Uint::Size1(_) => b'1',
+                Uint::Size2(_) => b'2',
+                Uint::Size4(_) => b'4',
+                Uint::Size8(_) => b'8',
+            },
+            FieldValue::Blob(blob) => match blob {
+                Blob::Size2(_) => b'A',
+                Blob::Size4(_) => b'B',
+                Blob::Size8(_) => b'C',
+            },
+            FieldValue::Hash(hash) => match hash {
+                Hash::Size4(_) => b'F',
+                Hash::Size20(_) => b'G',
+                Hash::Size32(_) => b'H',
+                Hash::Size48(_) => b'I',
+                Hash::Size64(_) => b'J',
+            },
+            FieldValue::Timespec(timespec) => match timespec {
+                Timespec::Size8(_) => b'S',
+                Timespec::Size12(_) => b'T',
+            },
+            FieldValue::String(_) => b'P',
+        }
+    }
+
+    /// The logical size reported for this field: the string byte length, the
+    /// uint width, the blob size-field width, or the fixed hash/timespec length.
+    pub fn size(&self) -> usize {
+        match self {
+            FieldValue::Flag => 0,
+            FieldValue::Uint(u) => u.byte_len(),
+            FieldValue::Blob(b) => b.blob_size_width(),
+            FieldValue::Hash(h) => h.as_bytes().len(),
+            FieldValue::Timespec(t) => t.as_bytes().len(),
+            FieldValue::String(s) => s.len(),
+        }
     }
 
     /// Number of value bytes this field occupies in the encoded stream,
@@ -377,110 +324,49 @@ impl Field {
     /// the 2-byte length prefix.
     pub(crate) fn encoded_value_len(&self) -> usize {
         match self {
-            Field::String(s) => 2 + s.len(),
-            other => other.table_key().1,
+            FieldValue::String(s) => 2 + s.len(),
+            other => other.size(),
         }
     }
 
     /// Append the value bytes (after the key+subtype prefix) to `out`.
     pub(crate) fn write_value(&self, out: &mut Vec<u8>) {
         match self {
-            Field::Flag => {}
-            Field::Uint(u) => u.write_value(out),
-            Field::Blob(b) => b.write_value(out),
-            Field::String(s) => {
+            FieldValue::Flag => {}
+            FieldValue::Uint(u) => u.write_value(out),
+            FieldValue::Blob(b) => b.write_value(out),
+            FieldValue::String(s) => {
                 out.extend_from_slice(&(s.len() as u16).to_le_bytes());
                 out.extend_from_slice(s);
             }
-            Field::Hash(h) => out.extend_from_slice(h.as_bytes()),
-            Field::Timespec(t) => out.extend_from_slice(t.as_bytes()),
+            FieldValue::Hash(h) => out.extend_from_slice(h.as_bytes()),
+            FieldValue::Timespec(t) => out.extend_from_slice(t.as_bytes()),
         }
     }
 
-    /// Validate that this value is representable.
-    ///
-    /// A value is representable exactly when its `(kind, size)` appears in the
-    /// `FIELD_KINDS` table (with strings additionally bounded by `u16`, and
-    /// timespec byte lengths matching their declared size).
-    pub(crate) fn validate(&self) -> Result<()> {
-        let len_is_valid = match self {
-            Field::String(s) => s.len() <= u16::MAX as usize,
-            // Uint, Blob, Hash, and Timespec are valid by construction.
-            Field::Uint(_) | Field::Blob(_) | Field::Hash(_) | Field::Timespec(_) => true,
-            other => in_table(other.table_key()),
-        };
-        if len_is_valid {
-            Ok(())
-        } else {
-            Err(Error::UnsupportedFieldSize { size: self.size() })
-        }
+    /// Decode a single field value from the cursor, given that the key bytes
+    /// have already been consumed. Reads the subtype byte and then exactly the
+    /// bytes that subtype implies.
+    pub(crate) fn read(cursor: &mut Cursor<&[u8]>) -> Result<FieldValue> {
+        let subtype = cursor.read_array::<1>()?[0];
+        Ok(match subtype {
+            b'*' => FieldValue::Flag,
+            b'1' => FieldValue::Uint(Uint::Size1(u8::from_le_bytes(cursor.read_array()?))),
+            b'2' => FieldValue::Uint(Uint::Size2(u16::from_le_bytes(cursor.read_array()?))),
+            b'4' => FieldValue::Uint(Uint::Size4(u32::from_le_bytes(cursor.read_array()?))),
+            b'8' => FieldValue::Uint(Uint::Size8(u64::from_le_bytes(cursor.read_array()?))),
+            b'A' => FieldValue::Blob(Blob::Size2(u16::from_le_bytes(cursor.read_array()?))),
+            b'B' => FieldValue::Blob(Blob::Size4(u32::from_le_bytes(cursor.read_array()?))),
+            b'C' => FieldValue::Blob(Blob::Size8(u64::from_le_bytes(cursor.read_array()?))),
+            b'F' => FieldValue::Hash(Hash::Size4(cursor.read_array()?)),
+            b'G' => FieldValue::Hash(Hash::Size20(cursor.read_array()?)),
+            b'H' => FieldValue::Hash(Hash::Size32(cursor.read_array()?)),
+            b'I' => FieldValue::Hash(Hash::Size48(cursor.read_array()?)),
+            b'J' => FieldValue::Hash(Hash::Size64(cursor.read_array()?)),
+            b'S' => FieldValue::Timespec(Timespec::Size8(cursor.read_array()?)),
+            b'T' => FieldValue::Timespec(Timespec::Size12(cursor.read_array()?)),
+            b'P' => FieldValue::String(String::try_from(cursor)?),
+            _ => return Err(Error::InvalidSubtype(subtype)),
+        })
     }
-
-    /// Decode a single field value from `data` starting at `pos`, given its
-    /// subtype byte. Returns the value and the position just past it.
-    ///
-    /// `end` bounds the header, so a malformed length can never read past it.
-    pub(crate) fn decode(sub: u8, data: &[u8], mut pos: usize, end: usize) -> Result<(Field, usize)> {
-        let (kind, size) = FIELD_KINDS
-            .iter()
-            .find(|(b, _, _)| *b == sub)
-            .map(|(_, k, s)| (*k, *s))
-            .ok_or(Error::InvalidSubtype(sub))?;
-
-        let value = match kind {
-            FieldKind::Flag => Field::Flag,
-            FieldKind::String => {
-                if pos + 2 > end {
-                    return Err(Error::Truncated);
-                }
-                let len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
-                pos += 2;
-                if pos + len > end {
-                    return Err(Error::Truncated);
-                }
-                let s = data[pos..pos + len].to_vec();
-                pos += len;
-                return Ok((Field::String(s), pos));
-            }
-            other => {
-                if pos + size > end {
-                    return Err(Error::Truncated);
-                }
-                let raw = &data[pos..pos + size];
-                pos += size;
-                match other {
-                    FieldKind::Uint => {
-                        Field::Uint(Uint::try_from(raw).expect("table size is a valid uint width"))
-                    }
-                    FieldKind::Blob => Field::Blob(
-                        Blob::from_width(size, read_uint_le(raw))
-                            .expect("table size is a valid blob width"),
-                    ),
-                    FieldKind::Hash => Field::Hash(
-                        Hash::try_from(raw).expect("table size is a valid hash length"),
-                    ),
-                    FieldKind::Timespec => Field::Timespec(
-                        Timespec::try_from(raw).expect("table size is a valid timespec length"),
-                    ),
-                    // Flag/String handled above.
-                    FieldKind::Flag | FieldKind::String => unreachable!(),
-                }
-            }
-        };
-        Ok((value, pos))
-    }
-}
-
-/// Whether a `(FieldKind, size)` pairing exists in the subtype table.
-fn in_table(key: (FieldKind, usize)) -> bool {
-    FIELD_KINDS.iter().any(|(_, k, s)| *k == key.0 && *s == key.1)
-}
-
-/// Read a little-endian unsigned integer from up to 8 bytes.
-fn read_uint_le(bytes: &[u8]) -> u64 {
-    let mut value = 0u64;
-    for (i, &b) in bytes.iter().enumerate().take(8) {
-        value |= (b as u64) << (8 * i);
-    }
-    value
 }
