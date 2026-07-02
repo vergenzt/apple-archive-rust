@@ -2,5 +2,12 @@
 name = "apple-archive"
 version = "0.1.0"
 edition = "2024"
+description = "Pure-Rust reader/writer for Apple Archive (.aar / AA01 / YAA1), ported from libNeoAppleArchive"
+license = "MIT"
 
 [dependencies]
+lzfse_rust = "0.2"
+flate2 = "1"
+
+[target.'cfg(unix)'.dependencies]
+xattr = "1"
