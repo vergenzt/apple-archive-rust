@@ -124,7 +124,7 @@ fn extract_item(item: &ArchiveItem, root: &Path) -> Result<()> {
     match typ {
         b'D' => {
             fs::create_dir_all(&target)?;
-            apply_metadata(&target, header, false);
+            apply_metadata(&target, header);
             if let Some(blob) = item.blob_slice(FieldKey::XAT) {
                 apply_xattr_blob(&target, blob);
             }
@@ -135,7 +135,7 @@ fn extract_item(item: &ArchiveItem, root: &Path) -> Result<()> {
             }
             let data = item.blob_slice(FieldKey::DAT).unwrap_or(&[]);
             fs::write(&target, data)?;
-            apply_metadata(&target, header, false);
+            apply_metadata(&target, header);
             if let Some(blob) = item.blob_slice(FieldKey::XAT) {
                 apply_xattr_blob(&target, blob);
             }
@@ -188,7 +188,7 @@ fn set_owner_fields(_header: &mut Header, _meta: &fs::Metadata) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn apply_metadata(path: &Path, header: &Header, _is_symlink: bool) {
+fn apply_metadata(path: &Path, header: &Header) {
     use std::os::unix::fs::{PermissionsExt, chown};
 
     if let Some(mode) = header.get_uint(FieldKey::MOD) {
@@ -202,7 +202,7 @@ fn apply_metadata(path: &Path, header: &Header, _is_symlink: bool) {
 }
 
 #[cfg(not(unix))]
-fn apply_metadata(_path: &Path, _header: &Header, _is_symlink: bool) {}
+fn apply_metadata(_path: &Path, _header: &Header) {}
 
 #[cfg(unix)]
 fn create_symlink(target: &[u8], link: &Path) -> Result<()> {

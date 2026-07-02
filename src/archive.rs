@@ -5,7 +5,7 @@
 //! just an ordered list of items, and its encoding is their concatenation.
 
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use crate::error::Result;
@@ -118,13 +118,6 @@ impl PlainArchive {
             item.write_into(&mut out)?;
         }
         Ok(out)
-    }
-
-    /// Write the encoded archive to any [`Write`] sink.
-    pub fn write<W: Write>(&self, mut writer: W) -> Result<()> {
-        let buf = self.encode()?;
-        writer.write_all(&buf)?;
-        Ok(())
     }
 
     /// Write the encoded archive to a file at `path`.

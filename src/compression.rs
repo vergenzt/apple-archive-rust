@@ -27,16 +27,6 @@ pub enum Compression {
 }
 
 impl Compression {
-    /// The raw algorithm identifier used in the container format.
-    pub fn as_raw(self) -> u32 {
-        match self {
-            Compression::None => 0,
-            Compression::Lzfse => 0x801,
-            Compression::Zlib => 0x505,
-            Compression::Lzbitmap => 0x702,
-        }
-    }
-
     /// The `pbz*` magic character for compressed variants, if any.
     fn magic_char(self) -> Option<u8> {
         match self {
@@ -191,13 +181,6 @@ impl PlainArchive {
             }
             Compression::Lzbitmap => Err(Error::UnsupportedCompression(Compression::Lzbitmap)),
         }
-    }
-
-    /// Write this archive, compressed, to any [`Write`] sink.
-    pub fn write_compressed<W: Write>(&self, compression: Compression, mut writer: W) -> Result<()> {
-        let buf = self.encode_compressed(compression)?;
-        writer.write_all(&buf)?;
-        Ok(())
     }
 
     /// Write this archive, compressed, to a file at `path`.

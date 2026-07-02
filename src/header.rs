@@ -128,11 +128,6 @@ impl Header {
         self.entries.iter().find(|e| e.key == key).map(|e| &e.value)
     }
 
-    /// The declared size of an entry's value, if present.
-    pub fn field_size(&self, key: FieldKey) -> Option<usize> {
-        self.get(key).map(FieldValue::size)
-    }
-
     /// Read a field as an unsigned integer.
     ///
     /// Works for `Uint` (returns the value) and `Blob` (returns the blob size).
@@ -150,12 +145,6 @@ impl Header {
             FieldValue::String(s) => Some(s),
             _ => None,
         }
-    }
-
-    /// Read a string field as a lossily-decoded [`String`].
-    pub fn get_string_lossy(&self, key: FieldKey) -> Option<String> {
-        self.get_string(key)
-            .map(|s| String::from_utf8_lossy(s).into_owned())
     }
 
     /// Insert or replace an entry.

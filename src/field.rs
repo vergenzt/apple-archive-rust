@@ -256,7 +256,6 @@ impl TryFrom<&mut Cursor<&[u8]>> for String {
 
 /// A decoded field value, carrying enough information to re-encode it exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[repr(u8)]
 pub enum FieldValue {
     /// A valueless flag.
     Flag,
