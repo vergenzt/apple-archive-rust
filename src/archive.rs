@@ -81,8 +81,8 @@ impl ArchiveItem {
     pub fn blob_slice(&self, key: FieldKey) -> Option<&[u8]> {
         let mut offset = 0usize;
         for entry in self.header.entries() {
-            if let Field::Blob { blob_size, .. } = &entry.value {
-                let len = *blob_size as usize;
+            if let Field::Blob(b) = &entry.value {
+                let len = b.blob_size() as usize;
                 if entry.key == key {
                     return self.blob_data.get(offset..offset + len);
                 }

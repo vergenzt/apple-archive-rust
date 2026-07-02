@@ -1,5 +1,5 @@
 //! A pure-Rust reader and writer for **Apple Archive** files (`.aar`, magic
-//! `AA01`, and the legacy `YAA1`).
+//! `AA01`, and the legacy `YAA1`), ported from libNeoAppleArchive.
 //!
 //! The crate covers the core Apple Archive format:
 //!
@@ -11,7 +11,7 @@
 //! * Building an archive from a directory tree and extracting one back to disk,
 //!   preserving mode/owner/xattrs on Unix.
 //!
-//! Apple Encrypted Archive (AEA) is not supported.
+//! Apple Encrypted Archive (AEA) format is not yet supported.
 //!
 //! # Examples
 //!
@@ -43,7 +43,7 @@ pub mod header;
 pub use archive::{ArchiveItem, PlainArchive};
 pub use compression::{Archive, Compression};
 pub use error::{Error, Result};
-pub use field::{Field, FieldKey, Hash, Timespec, Uint};
+pub use field::{Blob, Field, FieldKey, Hash, Timespec, Uint};
 pub use header::{Entry, Header};
 
 use std::path::Path;

@@ -171,6 +171,55 @@ impl TryFrom<&[u8]> for Uint {
     }
 }
 
+/// A blob reference, whose trailing data length is stored in a header size
+/// field of one of the widths the format allows.
+///
+/// Each variant carries the length of the trailing blob data; the variant
+/// itself selects the width used to encode that length in the header, so the
+/// width and the value can never disagree.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Blob {
+    /// Size stored in 2 bytes (subtype `A`).
+    Size2(u64),
+    /// Size stored in 4 bytes (subtype `B`).
+    Size4(u64),
+    /// Size stored in 8 bytes (subtype `C`).
+    Size8(u64),
+}
+
+impl Blob {
+    /// The length of the trailing blob data.
+    pub fn blob_size(&self) -> u64 {
+        match self {
+            Blob::Size2(v) | Blob::Size4(v) | Blob::Size8(v) => *v,
+        }
+    }
+
+    /// The encoded width of the size field in bytes (2, 4, or 8).
+    pub fn blob_size_width(&self) -> usize {
+        match self {
+            Blob::Size2(_) => 2,
+            Blob::Size4(_) => 4,
+            Blob::Size8(_) => 8,
+        }
+    }
+
+    /// Build a blob from its size-field width (2, 4, or 8) and data length.
+    pub(crate) fn from_width(size_bytes: usize, blob_size: u64) -> Result<Blob> {
+        Ok(match size_bytes {
+            2 => Blob::Size2(blob_size),
+            4 => Blob::Size4(blob_size),
+            8 => Blob::Size8(blob_size),
+            n => return Err(Error::UnsupportedFieldSize { size: n }),
+        })
+    }
+
+    /// Append the little-endian size bytes to `out`.
+    fn write_value(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.blob_size().to_le_bytes()[..self.blob_size_width()]);
+    }
+}
+
 /// A raw hash digest, sized to one of the fixed lengths the format allows.
 ///
 /// Each variant owns a fixed-size array, so an out-of-range length cannot be
@@ -279,14 +328,8 @@ pub enum Field {
     Flag,
     /// An unsigned integer; see [`Uint`] for the allowed widths.
     Uint(Uint),
-    /// A blob reference: `blob_size` bytes of data follow the header, and the
-    /// size itself is stored in `size` bytes within the header.
-    Blob {
-        /// Encoded width of the size field (2, 4, or 8).
-        size: u8,
-        /// Length of the trailing blob data.
-        blob_size: u64,
-    },
+    /// A blob reference; see [`Blob`] for the allowed size-field widths.
+    Blob(Blob),
     /// A length-prefixed string (raw bytes; not required to be UTF-8).
     String(Vec<u8>),
     /// A raw hash digest; see [`Hash`](enum@Hash) for the allowed lengths.
@@ -301,7 +344,7 @@ impl Field {
         match self {
             Field::Flag => (FieldKind::Flag, 0),
             Field::Uint(u) => (FieldKind::Uint, u.byte_len()),
-            Field::Blob { size, .. } => (FieldKind::Blob, *size as usize),
+            Field::Blob(b) => (FieldKind::Blob, b.blob_size_width()),
             Field::String(_) => (FieldKind::String, 0),
             Field::Hash(h) => (FieldKind::Hash, h.len()),
             Field::Timespec(t) => (FieldKind::Timespec, t.len()),
@@ -344,9 +387,7 @@ impl Field {
         match self {
             Field::Flag => {}
             Field::Uint(u) => u.write_value(out),
-            Field::Blob { size, blob_size } => {
-                out.extend_from_slice(&blob_size.to_le_bytes()[..*size as usize]);
-            }
+            Field::Blob(b) => b.write_value(out),
             Field::String(s) => {
                 out.extend_from_slice(&(s.len() as u16).to_le_bytes());
                 out.extend_from_slice(s);
@@ -362,13 +403,13 @@ impl Field {
     /// `FIELD_KINDS` table (with strings additionally bounded by `u16`, and
     /// timespec byte lengths matching their declared size).
     pub(crate) fn validate(&self) -> Result<()> {
-        let ok = match self {
+        let len_is_valid = match self {
             Field::String(s) => s.len() <= u16::MAX as usize,
-            // Uint, Hash, and Timespec are valid by construction.
-            Field::Uint(_) | Field::Hash(_) | Field::Timespec(_) => true,
+            // Uint, Blob, Hash, and Timespec are valid by construction.
+            Field::Uint(_) | Field::Blob(_) | Field::Hash(_) | Field::Timespec(_) => true,
             other => in_table(other.table_key()),
         };
-        if ok {
+        if len_is_valid {
             Ok(())
         } else {
             Err(Error::UnsupportedFieldSize { size: self.size() })
@@ -411,10 +452,10 @@ impl Field {
                     FieldKind::Uint => {
                         Field::Uint(Uint::try_from(raw).expect("table size is a valid uint width"))
                     }
-                    FieldKind::Blob => Field::Blob {
-                        size: size as u8,
-                        blob_size: read_uint_le(raw),
-                    },
+                    FieldKind::Blob => Field::Blob(
+                        Blob::from_width(size, read_uint_le(raw))
+                            .expect("table size is a valid blob width"),
+                    ),
                     FieldKind::Hash => Field::Hash(
                         Hash::try_from(raw).expect("table size is a valid hash length"),
                     ),

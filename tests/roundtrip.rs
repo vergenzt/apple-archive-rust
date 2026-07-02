@@ -1,7 +1,8 @@
 //! In-memory and on-disk round-trip tests for the Apple Archive port.
 
 use apple_archive::{
-    Archive, ArchiveItem, Compression, Field, FieldKey, Hash, Header, PlainArchive, Timespec, Uint,
+    Archive, ArchiveItem, Blob, Compression, Field, FieldKey, Hash, Header, PlainArchive, Timespec,
+    Uint,
 };
 
 /// A header should serialize to the exact byte layout the format specifies:
@@ -85,13 +86,13 @@ fn blob_auto_size() {
     header.set_blob(FieldKey::DAT, 0, 100).unwrap();
     assert!(matches!(
         header.get(FieldKey::DAT),
-        Some(Field::Blob { size: 2, blob_size: 100 })
+        Some(Field::Blob(Blob::Size2(100)))
     ));
 
     header.set_blob(FieldKey::XAT, 0, 70000).unwrap();
     assert!(matches!(
         header.get(FieldKey::XAT),
-        Some(Field::Blob { size: 4, .. })
+        Some(Field::Blob(Blob::Size4(_)))
     ));
 }
 

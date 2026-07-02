@@ -5,7 +5,7 @@
 //! and serialized on demand via [`Header::encode`].
 
 use crate::error::{Error, Result};
-use crate::field::{Field, FieldKey, Hash, Timespec, Uint};
+use crate::field::{Blob, Field, FieldKey, Hash, Timespec, Uint};
 
 /// Magic for modern Apple Archives (`AA01`).
 pub(crate) const AAR_MAGIC: &[u8; 4] = b"AA01";
@@ -115,7 +115,7 @@ impl Header {
         self.entries
             .iter()
             .filter_map(|e| match &e.value {
-                Field::Blob { blob_size, .. } => Some(*blob_size),
+                Field::Blob(b) => Some(b.blob_size()),
                 _ => None,
             })
             .sum()
@@ -147,7 +147,7 @@ impl Header {
     pub fn get_uint(&self, key: FieldKey) -> Option<u64> {
         match self.get(key)? {
             Field::Uint(u) => Some(u.value()),
-            Field::Blob { blob_size, .. } => Some(*blob_size),
+            Field::Blob(b) => Some(b.blob_size()),
             _ => None,
         }
     }
@@ -215,7 +215,7 @@ impl Header {
         } else {
             size
         };
-        self.set(key, Field::Blob { size, blob_size })
+        self.set(key, Field::Blob(Blob::from_width(size as usize, blob_size)?))
     }
 
     /// Set a timespec field.
@@ -228,13 +228,13 @@ impl Header {
         self.set(key, Field::Hash(hash))
     }
 
-    /// Remove an entry by key, returning `true` if it was present.
-    pub fn remove(&mut self, key: FieldKey) -> bool {
+    /// Remove an entry by key, returning the value if it was present.
+    pub fn remove(&mut self, key: FieldKey) -> Option<Field> {
         if let Some(idx) = self.index_of(key) {
-            self.entries.remove(idx);
-            true
+            let value = self.entries.remove(idx).value;
+            Some(value)
         } else {
-            false
+            None
         }
     }
 }
