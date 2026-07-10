@@ -1,13 +1,15 @@
 # apple-archive
 
-An idiomatic Rust library for reading and writing Apple Archive files. ported
+An idiomatic Rust library for reading and writing Apple Archive files, ported
 from [libNeoAppleArchive](https://github.com/0xilis/libNeoAppleArchive).
 
 > [!note]
 >
 > **LLM Disclosure**
 >
-> This library was developed with significant LLM usage (Claude models in a [pi.dev](https://pi.dev) harness). Its output was reviewed by its human author and multiple rounds of refactoring were applied to make it more idiomatic; however the human author is not an expert in compression nor in Rust, so use at your own risk. (Contributions from any actual experts who may be reading this are welcome!)
+> This library was developed with significant LLM usage (Claude models in a [pi.dev](https://pi.dev) harness). LLM output was reviewed by the human author and multiple rounds of refactoring were applied to make it more idiomatic; however the human author is not an expert in compression nor in Rust, so use at your own risk. (Contributions from any actual experts who may be reading this are welcome!)
+>
+> Transcripts of LLM conversations are provided in [`.dev/llm-threads`](.dev/llm-threads).
 
 ## Current Features
 
