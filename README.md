@@ -1,5 +1,9 @@
 # apple-archive
 
+[![crates.io](https://img.shields.io/crates/v/apple-archive.svg)](https://crates.io/crates/apple-archive)
+[![docs.rs](https://docs.rs/apple-archive/badge.svg)](https://docs.rs/apple-archive)
+[![license](https://img.shields.io/crates/l/apple-archive.svg)](LICENSE)
+
 An idiomatic Rust library for reading and writing Apple Archive files, ported
 from [libNeoAppleArchive](https://github.com/0xilis/libNeoAppleArchive).
 

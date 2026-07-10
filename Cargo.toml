@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "Pure-Rust reader/writer for Apple Archive (.aar / AA01 / YAA1), ported from libNeoAppleArchive"
 license = "MIT"
+repository = "https://github.com/vergenzt/apple-archive-rust"
+readme = "README.md"
+keywords = ["apple-archive", "aar", "lzfse", "compression"]
+categories = ["compression", "filesystem"]
 
 [dependencies]
 lzfse_rust = "0.2"
