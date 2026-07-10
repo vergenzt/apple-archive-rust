@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::error::{Error, Result};
+use crate::read_array::ReadArrayExt;
 
 /// A three-character field key such as `TYP`, `PAT`, or `DAT`.
 ///

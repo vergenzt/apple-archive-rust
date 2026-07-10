@@ -33,7 +33,10 @@
 //! assert_eq!(parsed, archive);
 //! ```
 
-#![feature(read_array)]
+// The vendored `ReadArrayExt::read_array` intentionally shadows the identically
+// named unstable `std::io::Read::read_array` (rust-lang/rust#148848) so that
+// stabilizing upstream lets us drop `src/read_array.rs` with no call-site churn.
+#![allow(unstable_name_collisions)]
 
 pub mod archive;
 pub mod compression;
@@ -41,6 +44,7 @@ pub mod error;
 pub mod field;
 mod fs;
 pub mod header;
+mod read_array;
 
 pub use archive::{ArchiveItem, PlainArchive};
 pub use compression::{Archive, Compression};

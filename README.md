@@ -26,8 +26,6 @@ from [libNeoAppleArchive](https://github.com/0xilis/libNeoAppleArchive).
 LZBITMAP (`pbzb`) is recognized but not implemented. Apple Encrypted Archive
 (AEA) is not yet supported.
 
-Requires a nightly toolchain for now (uses `#![feature(read_array)]`).
-
 ## Installation
 
 ```

@@ -4,7 +4,9 @@
 //! the `AA01`/`YAA1` magic and a `u16` total size. Entries are stored directly
 //! and serialized on demand via [`Header::encode`].
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
+
+use crate::read_array::ReadArrayExt;
 
 use crate::error::{Error, Result};
 use crate::field::{Blob, FieldKey, FieldValue, Hash, Timespec, Uint};
