@@ -27,7 +27,7 @@ Requires a nightly toolchain for now (uses `#![feature(read_array)]`).
 ## Installation
 
 ```
-cargo add apple_archive
+cargo add apple-archive
 ```
 
 ## Usage
